@@ -1,0 +1,26 @@
+{
+  "name": "punk-x-aave-yield-strategy",
+  "version": "1.0.0",
+  "description": "Strategy to earn yield on punk.finance protocol utilizing the aave protocol",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xb0x/Punk-X-Aave-Yield-Strategy.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/0xb0x/Punk-X-Aave-Yield-Strategy/issues"
+  },
+  "homepage": "https://github.com/0xb0x/Punk-X-Aave-Yield-Strategy#readme",
+  "devDependencies": {
+    "hardhat": "^2.4.1"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.1.0"
+  }
+}
