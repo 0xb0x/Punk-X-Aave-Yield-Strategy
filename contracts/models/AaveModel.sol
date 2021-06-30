@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity >=0.5.0 <0.9.0;
+pragma solidity 0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -10,6 +10,7 @@ import "../3rdDeFiInterfaces/ILendingPool.sol";
 import "../3rdDeFiInterfaces/IUniswapV2Router.sol";
 import "../interfaces/IAToken.sol";
 import "../interfaces/IAaveIncentivesController.sol";
+import "../interfaces/IStakedToken.sol";
 
 contract AaveModel is ModelInterface, ModelStorage{
     using SafeERC20 for IERC20;
@@ -19,20 +20,32 @@ contract AaveModel is ModelInterface, ModelStorage{
     address uRouterV2;
     ILendingPool lendingPool;
     address stkAave;
-    
+    address incentivesController;
+    address aaveToken;
 
+    uint256 internal constant RAY = 1e27;
+    uint constant coolDownPeriod = 7 days; 
+    uint coolDownStart;
+
+
+    
+    event Swap(uint amount, address tok0, address tok1);
     function initialize(
         address forge_, 
         address _lendingPool,
         address token_,
-         address uRouterV2_,
-         address _stkAave
+        address uRouterV2_,
+        address _stkAave,
+        address _aaveToken,
+        address incentivesController_
     ) public {
             _addToken( token_ );
             setForge( forge_ );
             lendingPool    = ILendingPool(_lendingPool);
             uRouterV2      = uRouterV2_;
             stkAave        = _stkAave;
+            incentivesController = incentivesController_;
+            aaveToken = _aaveToken;
 
     }
 
@@ -42,28 +55,29 @@ contract AaveModel is ModelInterface, ModelStorage{
 
     }
 
-    function getHighestApyToken() public returns( uint, address ) {
-        uint apy = 0;
+    function getHighestApyToken() public view returns( address, uint ) {
+        uint apy;
         address addr;
         for (uint i = 0; i < tokens().length; i++){
-            (,,,uint currentLiquidityRate,,,,,,,,) = LendingPool.getReserveData( token(i) );
+            (,,,uint currentLiquidityRate,,,,,,,,) = lendingPool.getReserveData( token(i) );
             uint percentDepositAPY = 100 * currentLiquidityRate / RAY;
             if(percentDepositAPY > apy) {
                 addr = token(i);
                 apy = percentDepositAPY;
             }
         }
-        return (addr, apr);
+        return (addr, apy);
     }
     
     function invest() public override {
         if (tokenInvestedIn != token(0)){
-            _swap(token(0), tokenInvestedIn);
-            uint balance = IERC20(tokenInvestedIn).balanceOf();
-            IERC20(tokenInvestedIn).safeApprove(lendingPool, balance);
-            lendingPool.deposit(token(0), balance, address(this), 0);
+            uint bal1 = IERC20(token(0)).balanceOf(address(this));
+            _swap(token(0), tokenInvestedIn, bal1);
+            uint bal2 = IERC20(tokenInvestedIn).balanceOf(address(this));
+            IERC20(tokenInvestedIn).safeApprove(address(lendingPool), bal2);
+            lendingPool.deposit(token(0), bal2, address(this), 0);
         } 
-        IERC20(token(0)).safeApprove(lendingPool, underlyingBalanceInModel);
+        IERC20(token(0)).safeApprove(address(lendingPool), underlyingBalanceInModel);
         lendingPool.deposit(token(0), underlyingBalanceInModel(), address(this), 0);
         
     }
@@ -72,40 +86,45 @@ contract AaveModel is ModelInterface, ModelStorage{
         return IERC20( token( 0 ) ).balanceOf( address( this ) );
     }
 
-    // function underlyingBalanceWithInvestment() public override view returns ( uint256 ){
-    //     return underlyingBalanceInModel().add()
-    // }
+    function underlyingBalanceWithInvestment() public override view returns ( uint256 ){
+        (,,,,,,,,address aTokenAddress,,,) = lendingPool.getReserveData( tokenInvestedIn );
+        return IERC20(aTokenAddress).balanceOf(address(this));
+    }
 
-    function _claimStkAave(address[] _token ) public {
+    function _claimStkAave(address[] calldata _token ) public {
         for(uint i = 0; i < _token.length; i++){
-            (,,,,,,,,address aTokenAddress,,,) = LendingPool.getReserveData( _token );
-            address incentivesController = IAToken(aTokenAddress).getIncentivesController();
+            // (,,,,,,,,address aTokenAddress,,,) = LendingPool.getReserveData( _token );
+            // address incentivesController = IAToken(aTokenAddress).getIncentivesController();
             IAaveIncentivesController(incentivesController).claimRewards(_token, type(uint).max, address(this));
-            // @todo
-            // claim rewards and swap to underlying
         }
-        
-
+        // claim rewards
+        IStakedToken(stkAave).cooldown();
+        coolDownStart = block.timestamp;
     }
 
     function reInvest() public {
         (address _token,) = getHighestApyToken();
         if(tokenInvestedIn != _token){
             lendingPool.withdraw(tokenInvestedIn, type(uint).max, address(this));
-            _swap(tokenInvestedIn, _token);
-            lendingPool.deposit(_token, IERC20(_token).balanceOf(), address(this), 0);
+            uint bal = IERC20(tokenInvestedIn).balanceOf((address(this)));
+            _swap(tokenInvestedIn, _token, bal);
+            lendingPool.deposit(_token, IERC20(_token).balanceOf(address(this)), address(this), 0);
         }
         investIn(_token);
         invest();
 
     }
 
-    function swapAaveToUnderlying(){
-        // @todo
+    function swapStkAave() internal {
+        require(block.timestamp > (coolDownStart + coolDownPeriod));
+        // redeem staked aave token
+        IStakedToken(stkAave).redeem(address(this), IERC20(stkAave).balanceOf(address(this)));
+        uint bal = IERC20(aaveToken).balanceOf(address(this));
         // swap redeemed stkAave to underlying
+        _swap(aaveToken, token(0), bal);
     }
 
-    function investIn(address _token) {
+    function investIn(address _token) internal {
         tokenInvestedIn = _token;
     }
 
@@ -113,11 +132,11 @@ contract AaveModel is ModelInterface, ModelStorage{
     function withdrawAllToForge() public OnlyForge override {
         lendingPool.withdraw(tokenInvestedIn, type(uint).max, address(this));
         if(tokenInvestedIn != token(0)){
-            _swap( tokenInvestedIn , token(0));
+            uint bal = IERC20(tokenInvestedIn).balanceOf(address(this));
+            _swap( tokenInvestedIn , token(0), bal);
         }
-        _claimStkAave(tokenInvestedIn);
         uint balance = IERC20(token(0)).balanceOf(address(this));
-        IERC20(token(0)).safeTransfer(to, balance);
+        IERC20(token(0)).safeTransfer(forge(), balance);
     }
 
     
@@ -126,40 +145,39 @@ contract AaveModel is ModelInterface, ModelStorage{
     }
     
     function withdrawTo(uint256 amount, address to) public OnlyForge override {
-        // @todo
-        // figure out how to calculate the balance of underlying of aTokens without withdrawing
-        uint balance = IERC20(token(0)).balanceOf(address(this));
-        balance = 
-        lendingPool.withdraw(tokenInvestedIn, type(uint).max, address(this));
+        require(amount > 0, "ZERO_AMOUNT");
+        uint oldBalance = IERC20( token(0) ).balanceOf( address( this ) );
+        lendingPool.withdraw(tokenInvestedIn, amount, address(this));
         if(tokenInvestedIn != token(0)){
-            _swap( tokenInvestedIn , token(0));
+            _swap(tokenInvestedIn, token(0), amount);
         }
+        uint newBalance = IERC20( token(0) ).balanceOf( address( this ) );
+        require(newBalance.sub( oldBalance ) > 0, "MODEL : REDEEM BALANCE IS ZERO");
+        IERC20( token( 0 ) ).safeTransfer( to, newBalance.sub( oldBalance ) );
         
-        IERC20(token(0)).safeTransfer(to, balance);
+        emit Withdraw( amount, to, block.timestamp);
     }
 
-    function _swap(address token0, address token1) internal {
+    function _swap(address token0, address token1, uint amount) internal {
         // Hard Work Now! For Punkers by 0xViktor
-        uint balance = IERC20(token0).balanceOf(address(this));
-        if (balance > 0) {
+        // uint balance = IERC20(token0).balanceOf(address(this));
+        require(amount > 0, 'ZERO_AMOUNT');
+        IERC20(token0).safeApprove(uRouterV2, amount);
+        
+        address[] memory path = new address[](3);
+        path[0] = address(token0);
+        path[1] = IUniswapV2Router02( uRouterV2 ).WETH();
+        path[2] = address( token1 );
 
-            IERC20(token0).safeApprove(uRouterV2, balance);
-            
-            address[] memory path = new address[](3);
-            path[0] = address(token0);
-            path[1] = IUniswapV2Router02( uRouterV2 ).WETH();
-            path[2] = address( token1 );
+        IUniswapV2Router02(uRouterV2).swapExactTokensForTokens(
+            amount,
+            1,
+            path,
+            address(this),
+            block.timestamp + ( 15 * 60 )
+        );
 
-            IUniswapV2Router02(uRouterV2).swapExactTokensForTokens(
-                balance,
-                1,
-                path,
-                address(this),
-                block.timestamp + ( 15 * 60 )
-            );
-
-            emit Swap(balance, underlyingBalanceInModel());
-        }
+        emit Swap(amount, token0, token1);
     }
 
 }
