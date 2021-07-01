@@ -59,8 +59,9 @@ contract AaveModel is ModelInterface, ModelStorage{
         uint apy;
         address addr;
         for (uint i = 0; i < tokens().length; i++){
-            (,,,uint currentLiquidityRate,,,,,,,,) = lendingPool.getReserveData( token(i) );
-            uint percentDepositAPY = 100 * currentLiquidityRate / RAY;
+            DataTypes.ReserveData memory data;
+            data = lendingPool.getReserveData( token(i) );
+            uint percentDepositAPY = 100 * data.currentLiquidityRate / RAY;
             if(percentDepositAPY > apy) {
                 addr = token(i);
                 apy = percentDepositAPY;
@@ -71,13 +72,11 @@ contract AaveModel is ModelInterface, ModelStorage{
     
     function invest() public override {
         if (tokenInvestedIn != token(0)){
-            uint bal1 = IERC20(token(0)).balanceOf(address(this));
-            _swap(token(0), tokenInvestedIn, bal1);
-            uint bal2 = IERC20(tokenInvestedIn).balanceOf(address(this));
-            IERC20(tokenInvestedIn).safeApprove(address(lendingPool), bal2);
-            lendingPool.deposit(token(0), bal2, address(this), 0);
+            _swap(token(0), tokenInvestedIn, underlyingBalanceInModel());
+            IERC20(tokenInvestedIn).safeApprove(address(lendingPool), balanceOfTokenInvested());
+            lendingPool.deposit(tokenInvestedIn, balanceOfTokenInvested(), address(this), 0);
         } 
-        IERC20(token(0)).safeApprove(address(lendingPool), underlyingBalanceInModel);
+        IERC20(token(0)).safeApprove(address(lendingPool), underlyingBalanceInModel());
         lendingPool.deposit(token(0), underlyingBalanceInModel(), address(this), 0);
         
     }
@@ -85,10 +84,14 @@ contract AaveModel is ModelInterface, ModelStorage{
     function underlyingBalanceInModel() public override view returns ( uint256 ){
         return IERC20( token( 0 ) ).balanceOf( address( this ) );
     }
+    function balanceOfTokenInvested() public view returns ( uint256 ){
+        return IERC20( tokenInvestedIn ).balanceOf( address( this ) );
+    }
 
     function underlyingBalanceWithInvestment() public override view returns ( uint256 ){
-        (,,,,,,,,address aTokenAddress,,,) = lendingPool.getReserveData( tokenInvestedIn );
-        return IERC20(aTokenAddress).balanceOf(address(this));
+        DataTypes.ReserveData memory data;
+        data = lendingPool.getReserveData( tokenInvestedIn );
+        return IERC20(data.aTokenAddress).balanceOf(address(this));
     }
 
     function _claimStkAave(address[] calldata _token ) public {
@@ -106,8 +109,7 @@ contract AaveModel is ModelInterface, ModelStorage{
         (address _token,) = getHighestApyToken();
         if(tokenInvestedIn != _token){
             lendingPool.withdraw(tokenInvestedIn, type(uint).max, address(this));
-            uint bal = IERC20(tokenInvestedIn).balanceOf((address(this)));
-            _swap(tokenInvestedIn, _token, bal);
+            _swap(tokenInvestedIn, _token, balanceOfTokenInvested());
             lendingPool.deposit(_token, IERC20(_token).balanceOf(address(this)), address(this), 0);
         }
         investIn(_token);
@@ -132,11 +134,9 @@ contract AaveModel is ModelInterface, ModelStorage{
     function withdrawAllToForge() public OnlyForge override {
         lendingPool.withdraw(tokenInvestedIn, type(uint).max, address(this));
         if(tokenInvestedIn != token(0)){
-            uint bal = IERC20(tokenInvestedIn).balanceOf(address(this));
-            _swap( tokenInvestedIn , token(0), bal);
+            _swap( tokenInvestedIn , token(0), balanceOfTokenInvested());
         }
-        uint balance = IERC20(token(0)).balanceOf(address(this));
-        IERC20(token(0)).safeTransfer(forge(), balance);
+        IERC20(token(0)).safeTransfer(forge(), underlyingBalanceInModel());
     }
 
     
