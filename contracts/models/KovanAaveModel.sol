@@ -9,43 +9,32 @@ import "../ModelStorage.sol";
 import "../3rdDeFiInterfaces/ILendingPool.sol";
 import "../3rdDeFiInterfaces/IUniswapV2Router.sol";
 import "../interfaces/IAToken.sol";
-import "../interfaces/IAaveIncentivesController.sol";
-import "../interfaces/IStakedToken.sol";
 
-contract AaveModel is ModelInterface, ModelStorage{
+contract KovanAaveModel is ModelInterface, ModelStorage{
     using SafeERC20 for IERC20;
     using SafeMath for uint;
 
+    // token deposited
     address tokenInvestedIn; 
     address uRouterV2;
+    // aave lending pool
     ILendingPool lendingPool;
-    address stkAave;
-    address incentivesController;
-    address aaveToken;
 
     uint256 internal constant RAY = 1e27;
-    uint constant coolDownPeriod = 7 days; 
-    uint coolDownStart = 0;
-
 
     
     event Swap(uint amount, address tok0, address tok1);
+
     function initialize(
         address forge_, 
         address _lendingPool,
         address token_,
-        address uRouterV2_,
-        address _stkAave,
-        address _aaveToken,
-        address incentivesController_
+        address uRouterV2_
     ) public {
             _addToken( token_ );
             setForge( forge_ );
             lendingPool    = ILendingPool(_lendingPool);
             uRouterV2      = uRouterV2_;
-            stkAave        = _stkAave;
-            incentivesController = incentivesController_;
-            aaveToken = _aaveToken;
 
     }
 
@@ -57,7 +46,7 @@ contract AaveModel is ModelInterface, ModelStorage{
 
     // returns the address of the token with highest apy in token()
     function getHighestApyToken() public view returns( address, uint ) {
-        uint apy;
+        uint apy = 0;
         address addr;
         for (uint i = 0; i < tokens().length; i++){
             DataTypes.ReserveData memory data;
@@ -79,8 +68,7 @@ contract AaveModel is ModelInterface, ModelStorage{
             lendingPool.deposit(tokenInvestedIn, balanceOfTokenInvested(), address(this), 0);
         } 
         IERC20(token(0)).safeApprove(address(lendingPool), underlyingBalanceInModel());
-        lendingPool.deposit(token(0), underlyingBalanceInModel(), address(this), 0);
-        
+        lendingPool.deposit(token(0), underlyingBalanceInModel(), address(this), 0);        
     }
 
     // returns balance of underlying token
@@ -99,18 +87,6 @@ contract AaveModel is ModelInterface, ModelStorage{
         // return IERC20(data.aTokenAddress).balanceOf(address(this));
     }
 
-    // claim stkAave token
-    function _claimStkAave() public {
-        // (,,,,,,,,address aTokenAddress,,,) = LendingPool.getReserveData( _token );
-        // address incentivesController = IAToken(aTokenAddress).getIncentivesController();
-        IAaveIncentivesController(incentivesController).claimRewards(tokens(), type(uint).max, address(this));
-    
-        // claim rewards
-        IStakedToken(stkAave).cooldown();
-        coolDownStart = block.timestamp;
-    }
-
-
     // gets token with highest deposit apy in lending pool
     // checks if the token deposited is token with highest apy, if not swap
     // to token with highest apy and deposit in lending pool
@@ -121,21 +97,9 @@ contract AaveModel is ModelInterface, ModelStorage{
             _swap(tokenInvestedIn, _token, balanceOfTokenInvested());
             lendingPool.deposit(_token, IERC20(_token).balanceOf(address(this)), address(this), 0);
         }
-        if(block.timestamp > (coolDownStart + coolDownPeriod) && coolDownStart != 0){
-            swapStkAave();
-        }
         investIn(_token);
         invest();
 
-    }
-
-    // redeems stkAave token for aave token and swap to underlying token
-    function swapStkAave() internal {
-        // redeem staked aave token
-        IStakedToken(stkAave).redeem(address(this), IERC20(stkAave).balanceOf(address(this)));
-        uint bal = IERC20(aaveToken).balanceOf(address(this));
-        // swap redeemed stkAave to underlying
-        _swap(aaveToken, token(0), bal);
     }
 
     // sets _token to token deposited
