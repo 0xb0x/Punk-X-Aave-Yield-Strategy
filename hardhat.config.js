@@ -1,4 +1,4 @@
-
+require("@nomiclabs/hardhat-waffle");
 require('dotenv').config();
 
 const mnemonic = process.env.MNEMONIC;
