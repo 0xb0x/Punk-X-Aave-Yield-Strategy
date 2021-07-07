@@ -23,7 +23,7 @@ const api_key = process.env.ALCHEMY_API_KEY;
       accounts: { mnemonic, },
     },
     kovan: {
-      url: `https://eth-mainnet.alchemyapi.io/v2/${api_key}`,
+      url: `https://eth-kovan.alchemyapi.io/v2/${api_key}`,
       accounts: { mnemonic, },
     }
 },
